@@ -1,0 +1,7 @@
+# For a namespaced install uncomment `deployments/default` and comment out `deployments/cluster`
+# Webhooks etc. can be added 
+
+resources: 
+- https://github.com/jetstack/cert-manager/releases/download/v1.5.3/cert-manager.yaml
+# - deployments/default
+- deployments/cluster
