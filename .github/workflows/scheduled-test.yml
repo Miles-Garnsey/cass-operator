@@ -1,0 +1,169 @@
+# This workflow should be eliminated if/when Github allows re-usable workflows to utilise self hosted runners. In the interim its jobs will need to be 
+# syncronised with kindIntegTest.yml manually.
+name: scheduled-test
+on: 
+  schedule:
+    - cron:  '55 3 * * *'
+jobs:
+  build_docker_images:
+    name: Build Docker Images
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out code into the Go module directory
+        uses: actions/checkout@v2
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Cache Docker layers
+        uses: actions/cache@v2
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-integ-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-integ-
+      - name: Build and push
+        id: docker_build
+        uses: docker/build-push-action@v2
+        with:
+          file: Dockerfile
+          context: .
+          push: false
+          tags: k8ssandra/cass-operator:latest
+          platforms: linux/amd64
+          outputs: type=docker,dest=/tmp/k8ssandra-cass-operator.tar
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+      - name: Build and push
+        uses: docker/build-push-action@v2
+        with:
+          file: logger.Dockerfile
+          push: false
+          tags: k8ssandra/system-logger:latest
+          outputs: type=docker,dest=/tmp/k8ssandra-system-logger.tar
+          platforms: linux/amd64
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache
+      - name: Upload cass-operator image
+        uses: actions/upload-artifact@v2
+        with:
+          name: cass-operator
+          path: /tmp/k8ssandra-cass-operator.tar
+      - name: Upload system-logger image
+        uses: actions/upload-artifact@v2
+        with:
+          name: system-logger
+          path: /tmp/k8ssandra-system-logger.tar
+  kind_integration_tests:
+    needs: build_docker_images
+    strategy:
+      matrix:
+        integration_test:
+        # Single worker tests:
+        - additional_serviceoptions
+        - additional_volumes
+        - delete_node_terminated_container
+        - podspec_simple
+        - smoke_test_oss
+        - smoke_test_dse
+        # - terminate # Completes too fast, the test doesn't catch it
+        - timeout_prestop_termination
+        # - upgrade_operator # Should be updated to datastax 1.6.0 -> k8ssandra/latest test
+        - webhook_validation
+        # Three worker tests:
+        - canary_upgrade
+        - config_change_condition
+        # - delete_node_lost_readiness # DSE specific behavior
+        - host_network
+        - internode-encryption-generated
+        - no_infinite_reconcile
+        - node_replace
+        - nodeport_service
+        - rolling_restart
+        - stop_resume
+        - superuser-secret-generated
+        - superuser-secret-provided
+        - test_bad_config_and_fix
+        - test_mtls_mgmt_api
+        # More than 3 workers tests:
+        - add_racks
+        - additional_seeds
+        - cluster_wide_install
+        - config_change
+        - config_secret
+        - multi_cluster_management
+        - oss_test_all_the_things
+        - scale_down
+        # - scale_down_not_enough_space # Not enough stable test
+        - scale_down_unbalanced_racks
+        - scale_up
+        - scale_up_stop_resume
+        - seed_selection
+        # - stop_resume_scale_up # Odd insufficient CPU issues in kind+GHA
+      # let other tests continue to run
+      # even if one fails
+      fail-fast: false
+    name: ${{ matrix.integration_test }}
+    runs-on: ubuntu-latest
+    env:
+      GOPATH: /home/runner/go
+      GOROOT: /usr/local/go1.16
+      CGO_ENABLED: 0
+      M_LOAD_TEST_IMAGES: false
+      M_INTEG_DIR: ${{ matrix.integration_test }}
+      M_K8S_FLAVOR: kind
+    steps:
+      - name: Free diskspace by removing unused packages
+        run: |
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+      - uses: actions/checkout@v2
+        if: github.event_name == 'pull_request'
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+      - uses: actions/checkout@v2
+        if: github.event_name != 'pull_request'
+      - name: Set up Go 1.16
+        uses: actions/setup-go@v1
+        with:
+          go-version: 1.16
+      - uses: actions/cache@v2
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+      - name: Create Kind Cluster
+        uses: helm/kind-action@v1.1.0
+        with:
+          version: v0.11.1
+          node_image: kindest/node:v1.20.7
+          cluster_name: kind
+          config: tests/testdata/kind/kind_config_6_workers.yaml
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v1
+      - name: Download cass-operator image
+        uses: actions/download-artifact@v2
+        with:
+          name: cass-operator
+          path: /tmp
+      - name: Download system-logger image
+        uses: actions/download-artifact@v2
+        with:
+          name: system-logger
+          path: /tmp
+      - name: Load Docker images
+        run: |
+          docker load --input /tmp/k8ssandra-cass-operator.tar
+          docker load --input /tmp/k8ssandra-system-logger.tar
+      - name: Load image on the nodes of the cluster
+        run: |
+          kind load docker-image --name=kind k8ssandra/cass-operator:latest
+          kind load docker-image --name=kind k8ssandra/system-logger:latest
+      - name: Run integration test ( ${{ matrix.integration_test }} )
+        run: |
+          make integ-test
+      - name: Archive k8s logs
+        if: ${{ failure() }}
+        uses: actions/upload-artifact@v2
+        with:
+          name: k8s-logs-${{ matrix.integration_test }}
+          path: ./build/kubectl_dump
