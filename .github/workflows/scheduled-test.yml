@@ -3,11 +3,11 @@
 name: scheduled-test
 on: 
   schedule:
-    - cron:  '55 3 * * *'
+    - cron:  '30 4 * * *'
 jobs:
   build_docker_images:
     name: Build Docker Images
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     steps:
       - name: Check out code into the Go module directory
         uses: actions/checkout@v2
