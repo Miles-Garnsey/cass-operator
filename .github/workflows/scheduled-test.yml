@@ -3,7 +3,7 @@
 name: scheduled-test
 on: 
   schedule:
-    - cron:  '40 7 * * *'
+    - cron:  '50 7 * * *'
 jobs:
   build_docker_images:
     name: Build Docker Images
