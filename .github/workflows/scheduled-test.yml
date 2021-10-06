@@ -102,7 +102,7 @@ jobs:
       # even if one fails
       fail-fast: false
     name: ${{ matrix.integration_test }}
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     env:
       GOPATH: /home/runner/go
       GOROOT: /usr/local/go1.16
